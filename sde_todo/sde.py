@@ -159,8 +159,8 @@ class OU(SDE):
 class VESDE(SDE):
     def __init__(self, N=100, T=1, sigma_min=0.01, sigma_max=50):
         super().__init__(N, T)
-        self.sigmas = torch.linspace(sigma_min, sigma_max, N)
-        self.sigma_0 = sigma_min
+        self.sigma_min=sigma_min
+        self.sigma_max=sigma_max
         self.N = N
         
     def sde_coeff(self, t, x):
@@ -168,9 +168,9 @@ class VESDE(SDE):
         return f, g
 
     def marginal_prob(self, t, x):
-        mean, std = x, self.sigmas[int(t*self.N)]**2 - self.sigma_0**2
-        return mean, torch.sqrt(std)
-
+        mean = x
+        std = self.sigma_min * (self.sigma_max / self.sigma_min)**t
+        return mean, std.unsqueeze(-1)
 
 class VPSDE(SDE):
     def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20):
@@ -179,6 +179,8 @@ class VPSDE(SDE):
         self.betas = torch.linspace(beta_min / N, beta_max / N, N) #beta_t = beta(t) dt = beta(t)/N
         self.alpha = 1. - self.betas
         self.alphas = torch.cumprod(self.alpha, dim=0)
+        self.beta_min = beta_min
+        self.beta_max = beta_max
         
     def sde_coeff(self, t, x):
         idx = (t*self.N).int()
@@ -186,10 +188,10 @@ class VPSDE(SDE):
         return f, g
 
     def marginal_prob(self, t, x):
-        idx = (t*self.N).long().clamp(0, self.N-1)
-        alphas = self.alphas[idx].unsqueeze(-1)
-        mean = torch.sqrt(alphas) * x
-        std = torch.sqrt(1 - alphas)
+        integral_beta = -0.5 * t**2 * (self.beta_max - self.beta_min) - t * self.beta_min 
+        exp_beta = torch.exp(integral_beta)[:, None]
+        mean = exp_beta * x
+        std = torch.sqrt(1. - exp_beta)
         return mean, std
 
 
