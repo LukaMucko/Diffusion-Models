@@ -164,7 +164,8 @@ class VESDE(SDE):
         self.N = N
         
     def sde_coeff(self, t, x):
-        f, g = torch.zeros_like(x), None
+        f = torch.zeros_like(x)
+        g = self.sigma_min * (self.sigma_max / self.sigma_min)**t * torch.sqrt(2 * torch.log(self.sigma_max/self.sigma_min))
         return f, g
 
     def marginal_prob(self, t, x):
@@ -183,8 +184,10 @@ class VPSDE(SDE):
         self.beta_max = beta_max
         
     def sde_coeff(self, t, x):
-        idx = (t*self.N).int()
-        f, g = -0.5 * self.betas[idx], torch.sqrt(self.betas[idx])
+        beta_t = self.beta_min + t * (self.beta_max - self.beta_min)
+        beta_t = beta_t.unsqueeze(-1)
+        f = -0.5 * beta_t * x
+        g = torch.sqrt(beta_t)
         return f, g
 
     def marginal_prob(self, t, x):
