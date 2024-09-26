@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from jaxtyping import Array
+from jaxtyping import Array, Float
 from typing import Callable
 
 def get_div(y: Array, x: Array):
@@ -30,6 +30,8 @@ class DSMLoss():
         Returns:
             None
         """
+        self.alpha=alpha
+        self.diff_weight=diff_weight
 
     def __call__(self,
                  t: Array,
@@ -47,8 +49,13 @@ class DSMLoss():
         Returns:
             loss: average loss value
         """
-        loss = None
-        return loss
+        s_theta = model(t, x)        
+        loss = (s - s_theta)**2
+        
+        if self.diff_weight:
+            loss = loss * diff_sq
+        
+        return self.alpha * torch.mean(loss)
 
 
 class ISMLoss():

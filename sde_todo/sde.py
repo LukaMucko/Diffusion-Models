@@ -4,13 +4,14 @@ import numpy as np
 from jaxtyping import Array, Float
 
 class SDE(abc.ABC):
-    def __init__(self, N: int, T: int):
+    def __init__(self, N: int, T: int, device):
         super().__init__()
         self.N = N         # number of discretization steps
         self.T = T         # terminal time
         self.dt = T / N
         self.is_reverse = False
         self.is_bridge = False
+        self.device=device
 
     @abc.abstractmethod
     def sde_coeff(self, t, x):
@@ -39,7 +40,7 @@ class SDE(abc.ABC):
             dw (same shape as x)
         """
         dt = self.dt if dt is None else dt
-        dw = torch.normal(mean=0.0, std=torch.sqrt(dt)*torch.ones_like(x))
+        dw = torch.normal(mean=0.0, std=np.sqrt(dt), size=x.shape, device=self.device)
         return dw
 
     def prior_sampling(self, x: Array):
@@ -52,7 +53,7 @@ class SDE(abc.ABC):
         Returns:
             z: random variable with same shape as x
         """
-        return torch.randn_like(x)
+        return torch.randn_like(x).to(self.device)
 
     def predict_fn(self,
                    t: Array,
@@ -82,6 +83,7 @@ class SDE(abc.ABC):
         N = self.N
         T = self.T
         forward_sde_coeff = self.sde_coeff
+        device = self.device
 
         class RSDE(self.__class__):
             def __init__(self, score_fn):
@@ -143,17 +145,17 @@ class SDE(abc.ABC):
 class OU(SDE):
     #Ornstein Uhlenbeck process with mu=0.5 and sigma=1 the initial value is x_0=0
     
-    def __init__(self, N=1000, T=1):
+    def __init__(self, N=1000, T=1, device="cuda"):
         super().__init__(N, T)
 
     def sde_coeff(self, t, x):
         f = -0.5 * x
-        g = torch.tensor(1.)
+        g = torch.tensor(1., device=self.device)
         return f, g
 
     def marginal_prob(self, t, x):
-        mean = torch.zeros_like(x)
-        std = torch.sqrt(1 - torch.exp(-t))
+        mean = torch.zeros_like(x, device=self.device)
+        std = torch.sqrt(1 - torch.exp(-t)).to(self.device)
         return mean, std[:, None]
 
 class VESDE(SDE):
@@ -164,9 +166,9 @@ class VESDE(SDE):
         self.N = N
         
     def sde_coeff(self, t, x):
-        f = torch.zeros_like(x)
+        f = torch.zeros_like(x, device=self.device)
         g = self.sigma_min * (self.sigma_max / self.sigma_min)**t * torch.sqrt(2 * torch.log(self.sigma_max/self.sigma_min))
-        return f, g
+        return f, g.to(self.device)
 
     def marginal_prob(self, t, x):
         mean = x
@@ -174,8 +176,8 @@ class VESDE(SDE):
         return mean, std.unsqueeze(-1)
 
 class VPSDE(SDE):
-    def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20):
-        super().__init__(N, T)
+    def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20, device="cuda"):
+        super().__init__(N, T, device)
         self.N = N
         self.betas = torch.linspace(beta_min / N, beta_max / N, N) #beta_t = beta(t) dt = beta(t)/N
         self.alpha = 1. - self.betas

@@ -27,15 +27,18 @@ def unfreeze(model):
 def get_sde_step_fn(model, ema, opt, loss_fn, sde):
     def step_fn(batch):
         # uniformly sample time step
-        t = sde.T*torch.rand(batch.shape[0])
+        t = sde.T*torch.rand(batch.shape[0]).to(batch.device)
 
         # TODO forward diffusion
-        xt = None
+        xt = sde.predict_fn(t, batch)
 
         # get loss
-        if isinstance(loss_fn, DSMLoss):
-            logp_grad = None # TODO
-            loss = loss_fn(t, xt.float(), model, logp_grad, diff_sq)
+        if type(loss_fn) == DSMLoss:
+            mean, std = sde.marginal_prob(t, batch)
+            logp_grad = -(batch - mean) / std
+            _, g = sde.sde_coeff(t, batch)
+            diff_sq = g*g
+            loss = loss_fn(t, xt.float(), model, logp_grad.to(batch.device), diff_sq.to(batch.device))
         elif isinstance(loss_fn, ISMLoss):
             loss = loss_fn(t, xt.float(), model)
         else:
@@ -83,14 +86,14 @@ def repeater(data_loader):
             yield data
 
 
-def train_diffusion(dataloader, step_fn, N_steps, plot=False):
+def train_diffusion(dataloader, step_fn, N_steps, plot=False, device="cuda"):
     pbar = tqdm(range(N_steps), bar_format="{desc}{bar}{r_bar}", mininterval=1)
     loader = iter(repeater(dataloader))
 
     log_freq = 200
     loss_history = torch.zeros(N_steps//log_freq)
     for i, step in enumerate(pbar):
-        batch = next(loader)
+        batch = next(loader).to(device)
         loss = step_fn(batch)
 
         if step % log_freq == 0:
@@ -99,4 +102,5 @@ def train_diffusion(dataloader, step_fn, N_steps, plot=False):
 
     if plot:
         plt.plot(range(len(loss_history)), loss_history)
+        plt.ylim(0, 1)
         plt.show()
