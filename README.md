@@ -151,6 +151,13 @@ $\mathbf{X}_T = \mathbf{X}_0 e^{-\mu T} + \sigma \int_0^T e^{-\mu(T-t)} d\mathbf
 and you can use the fact that $d\mathbf{B}_t^2 = dt$, and $\mathbb{E}[\int_0^T f(t) d\mathbf{B}_t] = 0$ where $f(t)$ is any
 deterministic function.
 
+> ### Solution:
+> $X_T | X_0=0 = \sigma \int_0^T e^{-\mu(T-t)} d\mathbf{B}_t$ <br/>
+> $\mathbb{E}(X_t|X_0=0) = \sigma \mathbb{E}[\int_0^T e^{-\mu(T-t)} d\mathbf{B}_t] = \sigma * 0 = 0$ <br/>
+> Using Itô's isometry: <br/>
+> $\text{Var}(X_t|X_0=0) = \sigma^2 \int_0^T[e^{-2\mu(T-t)}dt] - 0^2 = \frac{\sigma^2}{2\mu}[1-e^{-2\mu t}] = 1-e^{-t}$
+
+
 ## Task 1: very simple SGM pipeline with delicious swiss-roll
 A typical diffusion pipeline is divided into three components:
 1. [Forward Process and Reverse Process](#11-forward-and-reverse-process)
