@@ -175,16 +175,21 @@ class VESDE(SDE):
 class VPSDE(SDE):
     def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20):
         super().__init__(N, T)
-        self.betas = torch.linspace(beta_min, beta_max, N)
-        alpha = 1 - self.betas
-        self.alphas = torch.cumprod(alpha)
+        self.N = N
+        self.betas = torch.linspace(beta_min / N, beta_max / N, N) #beta_t = beta(t) dt = beta(t)/N
+        self.alpha = 1. - self.betas
+        self.alphas = torch.cumprod(self.alpha, dim=0)
         
     def sde_coeff(self, t, x):
-        f, g = -0.5 * self.betas[int(t*self.N)], torch.sqrt(self.betas[t*self.N])
+        idx = (t*self.N).int()
+        f, g = -0.5 * self.betas[idx], torch.sqrt(self.betas[idx])
         return f, g
 
     def marginal_prob(self, t, x):
-        mean, std = torch.sqrt(self.alphas[int(t*self.N)])*x, torch.sqrt(1-self.alphas[int(t*self.N)])
+        idx = (t*self.N).long().clamp(0, self.N-1)
+        alphas = self.alphas[idx].unsqueeze(-1)
+        mean = torch.sqrt(alphas) * x
+        std = torch.sqrt(1 - alphas)
         return mean, std
 
 
