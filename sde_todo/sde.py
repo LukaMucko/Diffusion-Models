@@ -1,7 +1,7 @@
 import abc
 import torch
 import numpy as np
-from jaxtyping import Array
+from jaxtyping import Array, Float
 
 class SDE(abc.ABC):
     def __init__(self, N: int, T: int):
@@ -39,7 +39,8 @@ class SDE(abc.ABC):
             dw (same shape as x)
         """
         dt = self.dt if dt is None else dt
-        return None
+        dw = torch.normal(mean=0.0, std=torch.sqrt(dt)*torch.ones_like(x))
+        return dw
 
     def prior_sampling(self, x: Array):
         """
@@ -69,7 +70,9 @@ class SDE(abc.ABC):
             x: input at time t+dt
         """
         dt = self.dt if dt is None else dt
-        pred = None
+        dw = self.dw(x, dt)
+        f, g = self.sde_coeff(t, x)
+        pred = x + f * dt + g * dw
         return pred
 
     def correct_fn(self, t: Array, x: Array):
@@ -99,8 +102,8 @@ class SDE(abc.ABC):
                     reverse_f: reverse drift term
                     g: reverse diffusion term
                 """
-                reverse_f = None
-                g         = None
+                f, g = self.forward_sde_coeff(t, x)
+                reverse_f = f - g**2 * model(t, x)
                 return reverse_f, g
 
             def ode_coeff(self, t: Array, x: Array):
@@ -129,45 +132,59 @@ class SDE(abc.ABC):
                 (TODO) Perform single step reverse diffusion
 
                 """
+                dt = self.dt if dt is None else dt
+                dw = - self.dw(t, x)
+                reverse_f, g = self.sde_coeff(t, x)
+                x = x + reverse_f * dt + g * dw 
                 return x
 
         return RSDE(model)
 
 class OU(SDE):
+    #Ornstein Uhlenbeck process with mu=0.5 and sigma=1 the initial value is x_0=0
+    
     def __init__(self, N=1000, T=1):
         super().__init__(N, T)
 
     def sde_coeff(self, t, x):
-        f, g = None, None
+        f = -0.5 * x
+        g = torch.tensor(1.)
         return f, g
 
     def marginal_prob(self, t, x):
-        mean, std = None, None
-        return mean, std
+        mean = torch.zeros_like(x)
+        std = torch.sqrt(1 - torch.exp(-t))
+        return mean, std[:, None]
 
 class VESDE(SDE):
     def __init__(self, N=100, T=1, sigma_min=0.01, sigma_max=50):
         super().__init__(N, T)
-
+        self.sigmas = torch.linspace(sigma_min, sigma_max, N)
+        self.sigma_0 = sigma_min
+        self.N = N
+        
     def sde_coeff(self, t, x):
-        f, g = None, None
+        f, g = torch.zeros_like(x), None
         return f, g
 
     def marginal_prob(self, t, x):
-        mean, std = None, None
-        return mean, std
+        mean, std = x, self.sigmas[int(t*self.N)]**2 - self.sigma_0**2
+        return mean, torch.sqrt(std)
 
 
 class VPSDE(SDE):
     def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20):
         super().__init__(N, T)
-
+        self.betas = torch.linspace(beta_min, beta_max, N)
+        alpha = 1 - self.betas
+        self.alphas = torch.cumprod(alpha)
+        
     def sde_coeff(self, t, x):
-        f, g = None, None
+        f, g = -0.5 * self.betas[int(t*self.N)], torch.sqrt(self.betas[t*self.N])
         return f, g
 
     def marginal_prob(self, t, x):
-        mean, std = None, None
+        mean, std = torch.sqrt(self.alphas[int(t*self.N)])*x, torch.sqrt(1-self.alphas[int(t*self.N)])
         return mean, std
 
 

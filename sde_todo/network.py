@@ -34,7 +34,7 @@ class MLP(nn.Module):
     def __init__(self,
                  in_dim: Int,
                  out_dim: Int,
-                 hid_shapes: Int[Array]):
+                 hid_shapes: Int[Array, "foo bar"]):
         '''
         (TODO) Build simple MLP
 
