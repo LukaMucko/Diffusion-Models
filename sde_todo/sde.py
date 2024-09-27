@@ -40,8 +40,8 @@ class SDE(abc.ABC):
             dw (same shape as x)
         """
         dt = self.dt if dt is None else dt
-        dw = torch.normal(mean=0.0, std=np.sqrt(dt), size=x.shape, device=self.device)
-        return dw
+        dw = torch.zeros_like(x) + torch.sqrt(torch.tensor(dt)) * torch.randn_like(x)
+        return dw.to(self.device)
 
     def prior_sampling(self, x: Array):
         """
@@ -135,7 +135,8 @@ class SDE(abc.ABC):
 
                 """
                 dt = self.dt if dt is None else dt
-                dw = - self.dw(t, x)
+                dw = - self.dw(x, dt)
+                dt = - dt
                 reverse_f, g = self.sde_coeff(t, x)
                 x = x + reverse_f * dt + g * dw 
                 return x
@@ -179,24 +180,28 @@ class VPSDE(SDE):
     def __init__(self, N=1000, T=1, beta_min=0.1, beta_max=20, device="cuda"):
         super().__init__(N, T, device)
         self.N = N
-        self.betas = torch.linspace(beta_min / N, beta_max / N, N) #beta_t = beta(t) dt = beta(t)/N
-        self.alpha = 1. - self.betas
-        self.alphas = torch.cumprod(self.alpha, dim=0)
         self.beta_min = beta_min
         self.beta_max = beta_max
+        #self.discrete_betas = torch.linspace(beta_min / N, beta_max / N, N) #beta_t = beta(t) dt = beta(t)/N
+        #self.alphas = 1. - self.discrete_betas
+        #self.alphas_cumprod = torch.cumprod(self.alpha, dim=0)
+        #self.sqrt_alphas_cumprod = torch.sqrt(self.alphas_cumprod)
+        #self.sqrt_1m_alphas_cumprod = torch.sqrt(1. - self.alphas_cumprod)
         
+    #CORRECT!
     def sde_coeff(self, t, x):
         beta_t = self.beta_min + t * (self.beta_max - self.beta_min)
-        beta_t = beta_t.unsqueeze(-1)
+        beta_t = beta_t.unsqueeze(-1).to(self.device)
         f = -0.5 * beta_t * x
         g = torch.sqrt(beta_t)
-        return f, g
+        return f.to(self.device), g.to(self.device)
 
+    #CORRECT
     def marginal_prob(self, t, x):
-        integral_beta = -0.5 * t**2 * (self.beta_max - self.beta_min) - t * self.beta_min 
+        integral_beta = -0.25 * t**2 * (self.beta_max - self.beta_min) - 0.5 * t * self.beta_min 
         exp_beta = torch.exp(integral_beta)[:, None]
         mean = exp_beta * x
-        std = torch.sqrt(1. - exp_beta)
+        std = torch.sqrt(1. - torch.exp(2. * integral_beta)[:, None])
         return mean, std
 
 

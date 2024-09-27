@@ -56,18 +56,18 @@ class MLP(nn.Module):
             hid_shapes: array of hidden layers' dimension
         '''
         super().__init__()
-        modules = [nn.Linear(in_dim, hid_shapes[0]), nn.ReLU()]
+        modules = [nn.Linear(in_dim, hid_shapes[0]), nn.LayerNorm(hid_shapes[0]), nn.SiLU()]
         
         for i in range(1, len(hid_shapes)):
             modules.append(nn.Linear(hid_shapes[i-1], hid_shapes[i]))
+            modules.append(nn.LayerNorm(hid_shapes[i]))
             if i != len(hid_shapes):
-                modules.append(nn.ReLU())
+                modules.append(nn.SiLU())
         modules.append(nn.Linear(hid_shapes[-1], out_dim))
         self.model = nn.Sequential(*modules)
 
     def forward(self, x: Array):
         return self.model(x)
-
 
 
 class SimpleNet(nn.Module):
@@ -97,6 +97,14 @@ class SimpleNet(nn.Module):
         self.embedder = PositionalEncoding(t_channel)
         self.encoder = MLP(in_dim + t_channel, z_dim, enc_shapes)
         self.decoder = MLP(z_dim, in_dim, enc_shapes)
+        self.skip = nn.Linear(in_dim + t_channel, in_dim)
+        self.init_weights()
+
+    def init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                nn.init.zeros_(m.bias) 
 
     def forward(self, t: Array, x: Array):
         '''
@@ -114,4 +122,6 @@ class SimpleNet(nn.Module):
         
         z = self.encoder(x_in)
         s = self.decoder(z)
-        return s
+        skip = self.skip(x_in)
+        
+        return s + skip

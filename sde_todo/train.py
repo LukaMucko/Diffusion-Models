@@ -1,5 +1,5 @@
 import torch
-from tqdm import tqdm
+from tqdm.notebook import tqdm
 from itertools import repeat
 import matplotlib.pyplot as plt
 from loss import ISMLoss, DSMLoss
@@ -30,12 +30,12 @@ def get_sde_step_fn(model, ema, opt, loss_fn, sde):
         t = sde.T*torch.rand(batch.shape[0]).to(batch.device)
 
         # TODO forward diffusion
-        xt = sde.predict_fn(t, batch)
-
+        mean, std = sde.marginal_prob(t, batch)
+        xt = mean + std * torch.randn_like(batch, device=batch.device)
+        
         # get loss
         if type(loss_fn) == DSMLoss:
-            mean, std = sde.marginal_prob(t, batch)
-            logp_grad = -(batch - mean) / std
+            logp_grad = -(xt - mean) / (std**2 + 1e-15)
             _, g = sde.sde_coeff(t, batch)
             diff_sq = g*g
             loss = loss_fn(t, xt.float(), model, logp_grad.to(batch.device), diff_sq.to(batch.device))
@@ -48,6 +48,9 @@ def get_sde_step_fn(model, ema, opt, loss_fn, sde):
         # optimize model
         opt.zero_grad()
         loss.backward()
+        
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         opt.step()
 
         if ema is not None:
@@ -87,20 +90,20 @@ def repeater(data_loader):
 
 
 def train_diffusion(dataloader, step_fn, N_steps, plot=False, device="cuda"):
-    pbar = tqdm(range(N_steps), bar_format="{desc}{bar}{r_bar}", mininterval=1)
     loader = iter(repeater(dataloader))
 
     log_freq = 200
     loss_history = torch.zeros(N_steps//log_freq)
-    for i, step in enumerate(pbar):
-        batch = next(loader).to(device)
-        loss = step_fn(batch)
+    with tqdm(range(N_steps), bar_format="{desc}{bar}{r_bar}", mininterval=1) as pbar:
+        for i, step in enumerate(pbar):
+            batch = next(loader).to(device)
+            loss = step_fn(batch)
 
-        if step % log_freq == 0:
-            loss_history[i//log_freq] = loss
-            pbar.set_description("Loss: {:.3f}".format(loss))
+            if step % log_freq == 0:
+                loss_history[i // log_freq] = loss
+                pbar.set_description("Loss: {:.3f}".format(loss))
 
     if plot:
         plt.plot(range(len(loss_history)), loss_history)
-        plt.ylim(0, 1)
+        plt.yscale('log')
         plt.show()
