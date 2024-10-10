@@ -27,7 +27,8 @@ class BaseScheduler(nn.Module):
 
         # TODO: Compute alphas and alphas_cumprod
         # alphas and alphas_cumprod correspond to $\alpha$ and $\bar{\alpha}$ in the DDPM paper (https://arxiv.org/abs/2006.11239).
-        alphas = alphas_cumprod = betas
+        alphas = 1 - betas
+        alphas_cumprod = torch.cumprod(alphas, dim=0) 
 
         self.register_buffer("betas", betas)
         self.register_buffer("alphas", alphas)
@@ -87,14 +88,14 @@ class DDPMScheduler(BaseScheduler):
 
         # TODO: Implement the DDPM's one step denoising function.
         # Refer to Algorithm 2 in the DDPM paper (https://arxiv.org/abs/2006.11239).
-
-        sample_prev = sample
+        t = timestep
+        sample_prev = 1 / torch.sqrt(self.alphas[t]) * (sample - (1 - self.alphas[t])/(torch.sqrt(1 - self.alphas_cumprod[t]) * noise_pred)) + self.sigmas[t] * torch.randn_like(sample)
 
         return sample_prev
 
     def add_noise(
         self,
-        original_sample: torch.Tensor,
+        sample: torch.Tensor,
         timesteps: torch.IntTensor,
         noise: Optional[torch.Tensor] = None,
     ):
@@ -112,8 +113,10 @@ class DDPMScheduler(BaseScheduler):
         
         # TODO: Implement the function that samples $\mathbf{x}_t$ from $\mathbf{x}_0$.
         # Refer to Equation 4 in the DDPM paper (https://arxiv.org/abs/2006.11239).
-
-        noisy_sample = noise = original_sample
+        t = timestep
+        if not noise:
+            noise = torch.randn_like(sample)
+        noisy_sample = torch.sqrt(self.alphas_cumprod[t]) * sample + torch.sqrt(1-self.alphas_cumprod[t]) * noise
 
         return noisy_sample, noise
 
@@ -164,7 +167,18 @@ class DDIMScheduler(BaseScheduler):
         """
         # TODO: Implement the DDIM's one step denoising function.
         # Refer to Equation 12 in the DDIM paper (https://arxiv.org/abs/2010.02502).
+        alpha_prod_t = self.alphas_cumprod[timestep]
+        alpha_prod_t_prev = self.alphas_cumprod[timestep - 1] if timestep > 0 else torch.tensor(1.0)
+        
+        beta_prod_t = 1 - alpha_prod_t
+        beta_prod_t_prev = 1 - alpha_prod_t_prev
 
-        sample_prev = sample
+        predicted_x0 = (sample - beta_prod_t ** 0.5 * noise_pred) / alpha_prod_t ** 0.5
 
+        sigma = eta * ((1 - alpha_prod_t_prev) / (1 - alpha_prod_t) * beta_prod_t) ** 0.5
+
+        direction = (1 - alpha_prod_t_prev - sigma ** 2) ** 0.5 * noise_pred
+        noise = sigma * torch.randn_like(sample)
+
+        sample_prev = alpha_prod_t_prev ** 0.5 * predicted_x0 + direction + noise
         return sample_prev
