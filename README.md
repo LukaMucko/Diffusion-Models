@@ -38,16 +38,16 @@
 </br>
 
 **Task 1**
-- [ ] 1.1 Define Forward SDE
-- [ ] 1.1 Define Backward SDE
-- [ ] 1.1 Define VPSDE
-- [ ] 1.1 Define VESDE
-- [ ] 1.2 Implement MLP Network 
-- [ ] 1.2 Implement DSM Loss
-- [ ] 1.2 Implement Training Loop
-- [ ] 1.3 Implement Discretization
-- [ ] 1.3 Implement Sampling Loop
-- [ ] 1.4 Evaluate Implementation
+- [X] 1.1 Define Forward SDE
+- [X] 1.1 Define Backward SDE
+- [X] 1.1 Define VPSDE
+- [X] 1.1 Define VESDE
+- [X] 1.2 Implement MLP Network 
+- [X] 1.2 Implement DSM Loss
+- [X] 1.2 Implement Training Loop
+- [X] 1.3 Implement Discretization
+- [X] 1.3 Implement Sampling Loop
+- [X] 1.4 Evaluate Implementation
 
 **Task 2**
 - [ ] 2.1 Implement DDIM Variance Scheduling
@@ -56,7 +56,7 @@
       
 **Optional Tasks**
 - [X] Add more additional task that you did here.
-- [ ] Implement EMA Training 
+- [X] Implement EMA Training 
 - [ ] Implement ISM Loss
 - [ ] Implement ODE Sampling
 - [ ] Implement Schrodinger Bridge
