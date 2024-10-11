@@ -63,8 +63,8 @@ class DDPMScheduler(BaseScheduler):
         if sigma_type == "small":
             # when $\sigma_t^2 = \tilde{\beta}_t$.
             alphas_cumprod_t_prev = torch.cat(
-                [torch.tensor(1.0), self.alphas_cumprod[-1:]]
-            )
+                    [torch.tensor([1.0]), self.alphas_cumprod[:-1]]
+                )
             sigmas = (
                 (1 - alphas_cumprod_t_prev) / (1 - self.alphas_cumprod) * self.betas
             ) ** 0.5

@@ -14,6 +14,7 @@ from pytorch_lightning import seed_everything
 from scheduler import DDIMScheduler, DDPMScheduler
 from torchvision.transforms.functional import to_pil_image
 from tqdm import tqdm
+import os
 
 matplotlib.use("Agg")
 
@@ -30,6 +31,8 @@ def main(args):
     config.device = f"cuda:{args.gpu}"
 
     now = get_current_time()
+    
+    os.makedirs("results", exist_ok=True)
     save_dir = Path(f"results/diffusion-{now}")
     save_dir.mkdir(exist_ok=True)
     print(f"save_dir: {save_dir}")
@@ -69,8 +72,6 @@ def main(args):
         attn=[1],
         num_res_blocks=4,
         dropout=0.1,
-        use_cfg=args.use_cfg,
-        cfg_dropout=args.cfg_dropout,
         num_classes=getattr(ds_module, "num_classes", None),
     )
 
@@ -118,7 +119,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", type=int, default=1)
+    parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--train_num_steps",
