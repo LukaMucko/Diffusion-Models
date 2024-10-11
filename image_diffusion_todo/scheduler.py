@@ -113,15 +113,15 @@ class DDPMScheduler(BaseScheduler):
         
         # TODO: Implement the function that samples $\mathbf{x}_t$ from $\mathbf{x}_0$.
         # Refer to Equation 4 in the DDPM paper (https://arxiv.org/abs/2006.11239).
-        t = timestep
-        if not noise:
+        t = timesteps
+        if noise is None:
             noise = torch.randn_like(sample)
         noisy_sample = torch.sqrt(self.alphas_cumprod[t]) * sample + torch.sqrt(1-self.alphas_cumprod[t]) * noise
 
         return noisy_sample, noise
 
 
-class DDIMScheduler(BaseScheduler):
+class DDIMScheduler(DDPMScheduler):
     def __init__(self, num_train_timesteps, beta_1, beta_T, mode="linear"):
         super().__init__(num_train_timesteps, beta_1, beta_T, mode)
 

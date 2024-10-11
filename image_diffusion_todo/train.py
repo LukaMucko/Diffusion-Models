@@ -55,7 +55,7 @@ def main(args):
     train_dl = ds_module.train_dataloader()
     train_it = get_data_iterator(train_dl)
 
-    var_scheduler = DDPMScheduler(
+    var_scheduler = DDIMScheduler(
         config.num_diffusion_train_timesteps,
         beta_1=config.beta_1,
         beta_T=config.beta_T,
@@ -72,6 +72,7 @@ def main(args):
         attn=[1],
         num_res_blocks=4,
         dropout=0.1,
+        use_cfg=True,
         num_classes=getattr(ds_module, "num_classes", None),
     )
 
@@ -144,7 +145,7 @@ if __name__ == "__main__":
     parser.add_argument("--beta_1", type=float, default=1e-4)
     parser.add_argument("--beta_T", type=float, default=0.02)
     parser.add_argument("--seed", type=int, default=63)
-    parser.add_argument("--image_resolution", type=int, default=64)
+    parser.add_argument("--image_resolution", type=int, default=32)
 
     args = parser.parse_args()
     main(args)

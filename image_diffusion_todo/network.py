@@ -35,7 +35,6 @@ class UNet(nn.Module):
         self.use_cfg = use_cfg
         self.cfg_dropout = cfg_dropout
         self.num_classes = num_classes
-        
         tdim = ch * 4
         self.time_embedding = TimeEmbedding(tdim)
         
@@ -89,7 +88,7 @@ class UNet(nn.Module):
         if self.use_cfg and class_label is not None:
             drop = random.random() <= self.cfg_dropout
             if not drop:
-                class_emb = self.class_embedding(class_label)
+                class_emb = self.class_embedding(class_label-1)
             else:
                 class_emb = torch.zeros_like(temb)
             temb = torch.cat([temb, class_emb], dim=1)
