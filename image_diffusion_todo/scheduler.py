@@ -89,7 +89,9 @@ class DDPMScheduler(BaseScheduler):
         # TODO: Implement the DDPM's one step denoising function.
         # Refer to Algorithm 2 in the DDPM paper (https://arxiv.org/abs/2006.11239).
         t = timestep
-        sample_prev = 1 / torch.sqrt(self.alphas[t]) * (sample - (1 - self.alphas[t])/(torch.sqrt(1 - self.alphas_cumprod[t]) * noise_pred)) + self.sigmas[t] * torch.randn_like(sample)
+        coeff1 = 1 / torch.sqrt(self.alphas[t])
+        coeff2 = (1 - self.alphas[t])/(torch.sqrt(1 - self.alphas_cumprod[t]))
+        sample_prev = coeff1 * (sample - coeff2 * noise_pred) + self.sigmas[t] * torch.randn_like(sample)
 
         return sample_prev
 

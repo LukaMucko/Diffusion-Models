@@ -18,7 +18,6 @@ import os
 
 matplotlib.use("Agg")
 
-
 def get_current_time():
     now = datetime.now().strftime("%m-%d-%H%M%S")
     return now
@@ -55,7 +54,7 @@ def main(args):
     train_dl = ds_module.train_dataloader()
     train_it = get_data_iterator(train_dl)
 
-    var_scheduler = DDIMScheduler(
+    var_scheduler = DDPMScheduler(
         config.num_diffusion_train_timesteps,
         beta_1=config.beta_1,
         beta_T=config.beta_T,
@@ -65,14 +64,12 @@ def main(args):
         var_scheduler.set_timesteps(20)  # 20 steps are enough in the case of DDIM.
 
     network = UNet(
-        T=config.num_diffusion_train_timesteps,
-        image_resolution=image_resolution,
-        ch=128,
-        ch_mult=[1, 2, 2, 2],
-        attn=[1],
-        num_res_blocks=4,
+        ch=64,
+        ch_mult=[1, 2, 2, 4],
+        attn=[False, False, True, True],
+        num_res_blocks=3,
         dropout=0.1,
-        use_cfg=True,
+        use_cfg=False,
         num_classes=getattr(ds_module, "num_classes", None),
     )
 
@@ -91,6 +88,7 @@ def main(args):
             if step % config.log_interval == 0:
                 ddpm.eval()
                 plt.plot(losses)
+                plt.yscale('log')
                 plt.savefig(f"{save_dir}/loss.png")
                 plt.close()
 
@@ -128,8 +126,8 @@ if __name__ == "__main__":
         default=100000,
         help="the number of model training steps.",
     )
-    parser.add_argument("--warmup_steps", type=int, default=200)
-    parser.add_argument("--log_interval", type=int, default=200)
+    parser.add_argument("--warmup_steps", type=int, default=500)
+    parser.add_argument("--log_interval", type=int, default=5000)
     parser.add_argument(
         "--max_num_images_per_cat",
         type=int,
