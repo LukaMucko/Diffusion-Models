@@ -10,160 +10,147 @@ class Swish(nn.Module):
     def forward(self, x):
         return x * torch.sigmoid(x)
 
-
-class DownSample(nn.Module):
-    def __init__(self, in_ch):
+class UpBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, tdim, attn=False):
         super().__init__()
-        self.main = nn.Conv2d(in_ch, in_ch, 3, stride=2, padding=1)
-        self.initialize()
+        self.res = ResBlock(in_channels + out_channels, out_channels, tdim)
+        if attn:
+            self.attn = AttnBlock(out_channels)
+        else:
+            self.attn = nn.Identity()
 
-    def initialize(self):
-        init.xavier_uniform_(self.main.weight)
-        init.zeros_(self.main.bias)
-
-    def forward(self, x, temb):
-        x = self.main(x)
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        x = self.res(x, t)
+        x = self.attn(x)
         return x
 
-
-class UpSample(nn.Module):
-    def __init__(self, in_ch):
+class DownBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, tdim, attn=False):
         super().__init__()
-        self.main = nn.Conv2d(in_ch, in_ch, 3, stride=1, padding=1)
-        self.initialize()
+        self.res = ResBlock(in_channels, out_channels, tdim)
+        if attn:
+            self.attn = AttnBlock(out_channels)
+        else:
+            self.attn = nn.Identity()
 
-    def initialize(self):
-        init.xavier_uniform_(self.main.weight)
-        init.zeros_(self.main.bias)
-
-    def forward(self, x, temb):
-        _, _, H, W = x.shape
-        x = F.interpolate(x, scale_factor=2, mode="nearest")
-        x = self.main(x)
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        x = self.res(x, t)
+        x = self.attn(x)
         return x
 
+class MiddleBlock(nn.Module):
+    def __init__(self, n_channels, tdim):
+        super().__init__()
+        self.res1 = ResBlock(n_channels, n_channels, tdim)
+        self.attn = AttnBlock(n_channels)
+        self.res2 = ResBlock(n_channels, n_channels, tdim)
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
+        x = self.res1(x, t)
+        x = self.attn(x)
+        x = self.res2(x, t)
+        return x
+
+        
+class Upsample(nn.Module):
+    def __init__(self, n_channels):
+        super().__init__()
+        self.conv = nn.ConvTranspose2d(n_channels, n_channels, kernel_size=(4, 4), stride=(2, 2), padding=(1, 1))
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor = None):
+        return self.conv(x)
+
+class Downsample(nn.Module):
+    def __init__(self, n_channels):
+        super().__init__()
+        self.conv = nn.Conv2d(n_channels, n_channels, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1))
+
+    def forward(self, x: torch.Tensor, t: torch.Tensor = None):
+        return self.conv(x)
 
 class AttnBlock(nn.Module):
-    def __init__(self, in_ch):
+    def __init__(self, in_channels, n_heads = 1, d_k = None):
         super().__init__()
-        self.group_norm = nn.GroupNorm(32, in_ch)
-        self.proj_q = nn.Conv2d(in_ch, in_ch, 1, stride=1, padding=0)
-        self.proj_k = nn.Conv2d(in_ch, in_ch, 1, stride=1, padding=0)
-        self.proj_v = nn.Conv2d(in_ch, in_ch, 1, stride=1, padding=0)
-        self.proj = nn.Conv2d(in_ch, in_ch, 1, stride=1, padding=0)
-        self.initialize()
+        if d_k is None:
+            d_k = in_channels
 
-    def initialize(self):
-        for module in [self.proj_q, self.proj_k, self.proj_v, self.proj]:
-            init.xavier_uniform_(module.weight)
-            init.zeros_(module.bias)
-        init.xavier_uniform_(self.proj.weight, gain=1e-5)
+        self.group_norm = nn.GroupNorm(32, in_channels)
+        self.projection = nn.Linear(in_channels, n_heads * d_k * 3)
+        self.output = nn.Linear(n_heads * d_k, in_channels)
+        self.scale = 1 / (d_k ** 0.5)
+        self.n_heads = n_heads
+        self.d_k = d_k
 
-    def forward(self, x):
+    def forward(self, x, t=None):
         B, C, H, W = x.shape
-        h = self.group_norm(x)
-        q = self.proj_q(h)
-        k = self.proj_k(h)
-        v = self.proj_v(h)
+        x = x.view(B, C, -1).permute(0, 2, 1)
+        
+        qkv = self.projection(x).view(B, -1, self.n_heads, self.d_k * 3)
+        q, k, v = qkv.chunk(3, dim=-1)
+        
+        attn = torch.einsum("bihd,bjhd->bijh", q, k) * self.scale
+        attn = attn.softmax(dim=2)
 
-        q = q.permute(0, 2, 3, 1).view(B, H * W, C)
-        k = k.view(B, C, H * W)
-        w = torch.bmm(q, k) * (int(C) ** (-0.5))
-        assert list(w.shape) == [B, H * W, H * W]
-        w = F.softmax(w, dim=-1)
+        res = torch.einsum('bijh,bjhd->bihd', attn, v)
+        res = res.view(B, -1, self.n_heads * self.d_k)
+        res = self.output(res)
 
-        v = v.permute(0, 2, 3, 1).view(B, H * W, C)
-        h = torch.bmm(w, v)
-        assert list(h.shape) == [B, H * W, C]
-        h = h.view(B, H, W, C).permute(0, 3, 1, 2)
-        h = self.proj(h)
+        res += x
+        res = res.permute(0, 2, 1).view(B, C, H, W)
 
-        return x + h
+        return res
 
 
 class ResBlock(nn.Module):
-    def __init__(self, in_ch, out_ch, tdim, dropout, attn=False):
+    def __init__(self, in_channels, out_ch, tdim, dropout=0.1):
         super().__init__()
         self.block1 = nn.Sequential(
-            nn.GroupNorm(32, in_ch),
+            nn.GroupNorm(32, in_channels),
             Swish(),
-            nn.Conv2d(in_ch, out_ch, 3, stride=1, padding=1),
+            nn.Conv2d(in_channels, out_ch, kernel_size=(3, 3), padding=(1, 1))
         )
-        self.temb_proj = nn.Sequential(
-            Swish(),
-            nn.Linear(tdim, out_ch),
-        )
+
         self.block2 = nn.Sequential(
             nn.GroupNorm(32, out_ch),
             Swish(),
             nn.Dropout(dropout),
-            nn.Conv2d(out_ch, out_ch, 3, stride=1, padding=1),
+            nn.Conv2d(out_ch, out_ch, kernel_size=(3, 3), padding=(1, 1))
         )
-        if in_ch != out_ch:
-            self.shortcut = nn.Conv2d(in_ch, out_ch, 1, stride=1, padding=0)
+
+        if in_channels != out_ch:
+            self.shortcut = nn.Conv2d(in_channels, out_ch, kernel_size=(1, 1))
         else:
             self.shortcut = nn.Identity()
-        if attn:
-            self.attn = AttnBlock(out_ch)
-        else:
-            self.attn = nn.Identity()
-        self.initialize()
 
-    def initialize(self):
-        for module in self.modules():
-            if isinstance(module, (nn.Conv2d, nn.Linear)):
-                init.xavier_uniform_(module.weight)
-                init.zeros_(module.bias)
-        init.xavier_uniform_(self.block2[-1].weight, gain=1e-5)
+        self.time_emb = nn.Sequential(
+            Swish(), 
+            nn.Linear(tdim, out_ch)
+        )
 
-    def forward(self, x, temb):
+    def forward(self, x: torch.Tensor, t: torch.Tensor):
         h = self.block1(x)
-        h += self.temb_proj(temb)[:, :, None, None]
+        h += self.time_emb(t)[:, :, None, None]
         h = self.block2(h)
-
-        h = h + self.shortcut(x)
-        h = self.attn(h)
-        return h
+        return h + self.shortcut(x)
 
 
 class TimeEmbedding(nn.Module):
-    def __init__(self, hidden_size, frequency_embedding_size=256):
+    def __init__(self, n_channels):
         super().__init__()
-        self.mlp = nn.Sequential(
-            nn.Linear(frequency_embedding_size, hidden_size, bias=True),
-            nn.SiLU(),
-            nn.Linear(hidden_size, hidden_size, bias=True),
-        )
-        self.frequency_embedding_size = frequency_embedding_size
+        self.n_channels = n_channels
+        self.lin1 = nn.Linear(n_channels // 4, n_channels)
+        self.act = Swish()
+        self.lin2 = nn.Linear(n_channels, n_channels)
 
-    @staticmethod
-    def timestep_embedding(t, dim, max_period=10000):
-        """
-        Create sinusoidal timestep embeddings.
-        :param t: a 1-D Tensor of N indices, one per batch element.
-                          These may be fractional.
-        :param dim: the dimension of the output.
-        :param max_period: controls the minimum frequency of the embeddings.
-        :return: an (N, D) Tensor of positional embeddings.
-        """
-        # https://github.com/openai/glide-text2im/blob/main/glide_text2im/nn.py
-        half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period)
-            * torch.arange(start=0, end=half, dtype=torch.float32)
-            / half
-        ).to(device=t.device)
-        args = t[:, None].float() * freqs[None]
-        embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
-        if dim % 2:
-            embedding = torch.cat(
-                [embedding, torch.zeros_like(embedding[:, :1])], dim=-1
-            )
-        return embedding
+    def forward(self, t: torch.Tensor):
+        half_dim = self.n_channels // 8
+        emb = math.log(10_000) / (half_dim - 1)
+        emb = torch.exp(torch.arange(half_dim, device=t.device) * -emb)
+        emb = t[:, None] * emb[None, :]
+        emb = torch.cat((emb.sin(), emb.cos()), dim=1)
 
-    def forward(self, t):
-        if t.ndim == 0:
-            t = t.unsqueeze(-1)
-        t_freq = self.timestep_embedding(t, self.frequency_embedding_size)
-        t_emb = self.mlp(t_freq)
-        return t_emb
+        emb = self.act(self.lin1(emb))
+        emb = self.lin2(emb)
+
+        return emb
+
