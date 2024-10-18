@@ -9,7 +9,7 @@ import torch
 from dataset import AFHQDataModule, get_data_iterator, tensor_to_pil_image
 from dotmap import DotMap
 from ddpm import DiffusionModule
-from network import UNet
+from network import UNet, EMA
 from pytorch_lightning import seed_everything
 from scheduler import DDIMScheduler, DDPMScheduler
 from torchvision.transforms.functional import to_pil_image
@@ -36,7 +36,7 @@ def main(args):
     save_dir.mkdir(exist_ok=True)
     print(f"save_dir: {save_dir}")
 
-    seed_everything(config.seed)
+    #seed_everything(config.seed)
 
     with open(save_dir / "config.json", "w") as f:
         json.dump(config, f, indent=2)
@@ -64,12 +64,15 @@ def main(args):
         var_scheduler.set_timesteps(20)  # 20 steps are enough in the case of DDIM.
 
     network = UNet(
+        T=config.num_diffusion_train_timesteps,
+        image_resolution=image_resolution,
         ch=64,
         ch_mult=[1, 2, 2, 4],
         attn=[False, False, True, True],
-        num_res_blocks=3,
+        num_res_blocks=4,
         dropout=0.1,
         use_cfg=False,
+        cfg_dropout=0.1,
         num_classes=getattr(ds_module, "num_classes", None),
     )
 
@@ -80,6 +83,8 @@ def main(args):
     scheduler = torch.optim.lr_scheduler.LambdaLR(
         optimizer, lr_lambda=lambda t: min((t + 1) / config.warmup_steps, 1.0)
     )
+    
+    ema = EMA(ddpm.network, decay=0.999)
 
     step = 0
     losses = []
@@ -87,6 +92,7 @@ def main(args):
         while step < config.train_num_steps:
             if step % config.log_interval == 0:
                 ddpm.eval()
+                ema.apply_shadow()  
                 plt.plot(losses)
                 plt.yscale('log')
                 plt.savefig(f"{save_dir}/loss.png")
@@ -98,6 +104,7 @@ def main(args):
                     img.save(save_dir / f"step={step}-{i}.png")
 
                 ddpm.save(f"{save_dir}/last.ckpt")
+                ema.restore()
                 ddpm.train()
 
             img, label = next(train_it)
@@ -106,10 +113,12 @@ def main(args):
             pbar.set_description(f"Loss: {loss.item():.4f}")
 
             optimizer.zero_grad()
-            loss.backward()
+            loss.backward()            
             optimizer.step()
             scheduler.step()
             losses.append(loss.item())
+
+            ema.update(ddpm.network)
 
             step += 1
             pbar.update(1)

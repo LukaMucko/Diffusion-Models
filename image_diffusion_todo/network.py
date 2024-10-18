@@ -3,76 +3,97 @@ from typing import List, Optional
 import numpy as np
 import torch
 import torch.nn as nn
-from module import DownBlock, MiddleBlock, UpBlock, Upsample, Downsample, AttnBlock, ResBlock, TimeEmbedding, Swish
+from module import DownSample, ResBlock, Swish, TimeEmbedding, UpSample
 from torch.nn import init
-import random
 
+class EMA:
+    def __init__(self, model, decay=0.999):
+        self.decay = decay
+        self.model = model
+        self.shadow = {name: param.clone().detach() for name, param in model.named_parameters() if param.requires_grad}
+
+    def update(self, new_model):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                self.shadow[name].data = self.decay * self.shadow[name].data + (1.0 - self.decay) * param.data
+            
+    def apply_shadow(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.shadow[name].data
+
+    def restore(self):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad:
+                param.data = self.shadow[name].data        
+            
 
 class UNet(nn.Module):
     def __init__(
         self,
-        in_channels: int = 3,
-        out_channels: int = 3,
-        n_channels: int = 64,
-        ch_mult: List[int] = [1, 2, 2, 4],
+        T: int = 1000,
+        image_resolution: int = 64,
+        in_channels = 3,
+        out_channels = 3,
+        ch: int = 128,
+        ch_mult: List[int] = [1, 2, 2, 2],
         attn: List[bool] = [False, False, True, True],
-        n_blocks: int = 2,
+        num_res_blocks: int = 4,
+        dropout: float = 0.1,
         use_cfg: bool = False,
         cfg_dropout: float = 0.1,
         num_classes: Optional[int] = None,
     ):
         super().__init__()
-
-        n_resolutions = len(ch_mult)
-        self.out_channels = out_channels
-        
-        self.init_conv = nn.Conv2d(in_channels, n_channels, kernel_size=3, padding=1)
-        
-        # Time embedding
-        self.tdim = n_channels * 4
-        self.time_embedding = TimeEmbedding(self.tdim)
-        
-        # Class embedding
+        self.image_resolution = image_resolution
+        self.T = T
+        self.num_classes = num_classes
+        self.ch = ch
+        self.ch_mult = ch_mult
+        self.attn = attn
+        self.num_res_blocks = num_res_blocks
+        self.dropout = dropout
         self.use_cfg = use_cfg
-        if use_cfg:
-            self.cfg_dropout = cfg_dropout
-            assert num_classes is not None, "num_classes must be provided when use_cfg is True."
-            self.class_embedding = nn.Embedding(num_classes, self.tdim)
+        self.cfg_dropout = cfg_dropout
+        
+        tdim = 4 * ch
+        self.time_embedding = TimeEmbedding(tdim, tdim)
+        
+        self.input = nn.Conv2d(in_channels, ch, 3, stride=1, padding=1)
+        nn.init.xavier_uniform_(self.input.weight, gain=1e-5)
+        
+        if self.use_cfg:
+            self.class_embedding = nn.Embedding(num_classes, tdim)
+        
+        self.down = nn.ModuleList()
+        in_ch = ch
+        out_ch = ch
+        for i, mult in enumerate(ch_mult):
+            out_ch = in_ch * mult
+            for _ in range(num_res_blocks):
+                self.down.append(ResBlock(in_ch, out_ch, tdim=tdim, dropout=dropout, attn=attn[i]))
+                in_ch = out_ch
+            if i != len(ch_mult) - 1:
+                self.down.append(DownSample(in_ch))
             
+        self.middle = ResBlock(out_ch, out_ch, tdim, dropout, attn=True)          
         
-        # Downsampling
-        self.downs = nn.ModuleList()
-        out_channels = in_channels = n_channels
-        for i in range(n_resolutions):       
-            out_channels = in_channels * ch_mult[i]
-            for _ in range(n_blocks):
-                self.downs.append(DownBlock(in_channels, out_channels, self.tdim, attn[i]))
-                in_channels = out_channels
-            if i < n_resolutions - 1:
-                self.downs.append(Downsample(out_channels))
-             
-        # Middle blocks
-        self.middle = MiddleBlock(out_channels, self.tdim)
-        
-        # Upsampling
-        self.ups = nn.ModuleList()
-        in_channels = out_channels
-        for i in reversed(range(n_resolutions)):  
-            in_channels = out_channels
-            for _ in range(n_blocks):
-                self.ups.append(UpBlock(in_channels, out_channels, self.tdim, attn[i]))
-                in_channels = out_channels
-            out_channels = in_channels // ch_mult[i]
-            self.ups.append(UpBlock(in_channels, out_channels, self.tdim, attn[i]))
+        self.up = nn.ModuleList()
+
+        for i in reversed(range(len(ch_mult))):
+            out_ch = in_ch
+            for _ in range(num_res_blocks):
+                self.up.append(ResBlock(in_ch + out_ch, out_ch, tdim, dropout, attn=attn[i]))
+            out_ch = out_ch // ch_mult[i]
+            self.up.append(ResBlock(in_ch + out_ch, out_ch, tdim, dropout, attn=attn[i]))
+            in_ch = out_ch
             if i > 0:
-                self.ups.append(Upsample(out_channels))
-        
-        self.final_conv = nn.Sequential(
-            nn.GroupNorm(8, n_channels),
-            Swish(),
-            nn.Conv2d(n_channels, self.out_channels, kernel_size=3, padding=1)
-        )
-        
+                self.up.append(UpSample(in_ch, in_ch))
+                
+        self.final = ResBlock(ch, ch, tdim, dropout, attn=False)
+        self.output = nn.Conv2d(ch, out_channels, 3, stride=1, padding=1)
+        nn.init.xavier_uniform_(self.output.weight, gain=1e-5)
+
     def forward(self, x, timestep, class_label=None):
         """
         Input:
@@ -82,40 +103,33 @@ class UNet(nn.Module):
         Output:
             out (`torch.Tensor [B,C,H,W]`): noise prediction.
         """
+        assert (
+            x.shape[-1] == x.shape[-2] == self.image_resolution
+        ), f"The resolution of x ({x.shape[-2]}, {x.shape[-1]}) does not match with the image resolution ({self.image_resolution})."
 
-        # Time embedding
+        # TODO: Implement noise prediction network's forward function.
+        
+        x = self.input(x)
         t = self.time_embedding(timestep)
-        
-        # Class embedding with CFG
-        if self.use_cfg and self.class_embedding is not None and class_label is not None:
-            cemb = self.class_embedding(class_label)
-            no_class_mask = (class_label==0)
-            dropout_mask = torch.rand_like(class_label) < self.cfg_dropout
-            mask = no_class_mask | dropout_mask
-            cemb[mask, :] = 0
-            temb = temb + cemb
-        
-        x = self.init_conv(x)
+        if self.use_cfg:
+            dropout = torch.bernoulli(torch.full_like(class_label.float(), self.cfg_dropout)).bool()
+            mask = (class_label != 0) | dropout
+            c_emb = torch.zeros_like(t)
+            c_emb[mask] = self.class_embedding(class_label[mask] - 1)
+            t += c_emb 
+            
         h = [x]
-        
-        # Down path
-        for m in self.downs:
-            x = m(x, t)
+        for layer in self.down:
+            x = layer(x, t)
             h.append(x)
         
-        # Middle
         x = self.middle(x, t)
         
-        # Up path
-        for m in self.ups:
-            if isinstance(m, Upsample):
-                x = m(x, t)
+        for layer in self.up:
+            if isinstance(layer, UpSample):
+                x = layer(x, t)
             else:
                 s = h.pop()
-                x = torch.cat([x, s], dim=1)
-                x = m(x, t)
-
-        # Final blocks
-        out = self.final_conv(x)
-        
-        return out
+                x = torch.cat((x, s), dim=1)
+                x = layer(x, t)
+        return self.output(self.final(x, t))
