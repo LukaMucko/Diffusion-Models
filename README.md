@@ -50,9 +50,9 @@
 - [X] 1.4 Evaluate Implementation
 
 **Task 2**
-- [ ] 2.1 Implement DDIM Variance Scheduling
-- [ ] 2.2 Implement CFG
-- [ ] 2.3 Implement Image Inpainting
+- [X] 2.1 Implement DDIM Variance Scheduling
+- [X] 2.2 Implement CFG
+- [X] 2.3 Implement Image Inpainting
       
 **Optional Tasks**
 - [X] Add more additional task that you did here.
